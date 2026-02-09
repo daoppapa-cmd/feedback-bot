@@ -15,7 +15,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- WEB SERVER (Keep Render Awake) ---
+# --- WEB SERVER (ដើម្បីឱ្យ Render ដើររហូត) ---
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,10 +29,11 @@ def run_flask():
 
 # 1. ផ្នែក User ផ្ញើមក (Support គ្រប់ប្រភេទ file)
 async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # តែងតែ Forward គ្រប់យ៉ាងដែល User ផ្ញើមក (មិនថាអក្សរ រូប ឬសំឡេង)
-    # ឆែកមើលថាជា Private Chat (User ឆាតមក Bot) ឬអត់?
+    # សំខាន់៖ ទទួលយកតែសារដែលផ្ញើពី Private Chat (១ ទល់ ១) ប៉ុណ្ណោះ
+    # ដើម្បីកុំឱ្យច្រឡំសាររបស់ Admin ក្នុង Group
     if update.effective_chat.type == "private":
         try:
+            # Forward គ្រប់យ៉ាង (Text, Photo, Video...) ទៅកាន់ Admin Group
             await context.bot.forward_message(
                 chat_id=ADMIN_GROUP_ID,
                 from_chat_id=update.effective_chat.id,
@@ -43,20 +44,19 @@ async def handle_incoming_message(update: Update, context: ContextTypes.DEFAULT_
 
 # 2. ផ្នែក Admin Reply ទៅវិញ (Support គ្រប់ប្រភេទ file)
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ធ្វើការតែនៅពេល៖ នៅក្នុង Group Admin + មានការ Reply
+    # ធ្វើការតែនៅពេល៖ នៅក្នុង Group Admin + មានការ Reply លើសារគេ
     if str(update.effective_chat.id) == str(ADMIN_GROUP_ID) and update.message.reply_to_message:
         try:
             # ជំហានទី ១: រកមើល User ID របស់ម្ចាស់សារដើម
             original_msg = update.message.reply_to_message
             user_id = None
 
-            # ករណីទី ១: ធម្មតា (ឃើញ ID)
+            # ករណីទី ១: User ធម្មតា (បើក Privacy ឱ្យឃើញ Profile)
             if original_msg.forward_from:
                 user_id = original_msg.forward_from.id
             
-            # ករណីទី ២: បើប្រើ Library ថ្មី ឬ Telegram update ថ្មី (Hidden User)
+            # ករណីទី ២: សាកល្បងរកតាមវិធីថ្មី (សម្រាប់ Telegram update ថ្មី)
             elif original_msg.forward_origin:
-                # ព្យាយាមទាញយក ID ពី forward_origin
                 if hasattr(original_msg.forward_origin, 'sender_user'):
                     user_id = original_msg.forward_origin.sender_user.id
 
@@ -70,10 +70,11 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
             else:
                 # ករណី User បិទ Privacy (Forwarded Messages = Nobody)
+                # យើងត្រូវប្រាប់ Admin ឱ្យដឹងថា Reply អត់ទៅទេ
                 await update.message.reply_text(
-                    "⚠️ **មិនអាច Reply បានទេ!**\n\n"
-                    "User នេះបានកំណត់ Privacy បិទមិនឱ្យគេឃើញ Profile របស់គាត់ពេល Forward។\n"
-                    "ដំណោះស្រាយ៖ សូមប្រាប់ User ឱ្យឆាតមកម្ដងទៀត ហើយបើក Privacy ជា Public សិន។"
+                    "⚠️ **បរាជ័យ!**\n\n"
+                    "User ម្នាក់នេះបានបិទ Privacy (Who can see my forwarded messages = Nobody)។\n"
+                    "ដូច្នេះ Bot មិនអាចស្គាល់ ID របស់គាត់ដើម្បី Reply ទេ។"
                 )
 
         except Exception as e:
@@ -90,11 +91,11 @@ if __name__ == '__main__':
     else:
         application = ApplicationBuilder().token(TOKEN).build()
 
-        # Handler សម្រាប់ User (ចាប់យកគ្រប់យ៉ាង មិនមែនតែ Text ទេ)
-        # filters.ALL មានន័យថាចាប់ទាំងរូប ទាំងសំឡេង ទាំងអក្សរ
+        # HANDLER 1: សម្រាប់ User (ប្រើ filters.ChatType.PRIVATE សំខាន់ណាស់!)
+        # filters.ALL មានន័យថាចាប់យកទាំង Text, Photo, Video, Voice...
         user_handler = MessageHandler(filters.ChatType.PRIVATE & (~filters.COMMAND), handle_incoming_message)
         
-        # Handler សម្រាប់ Admin Reply (ប្រើ filters.REPLY អក្សរធំ)
+        # HANDLER 2: សម្រាប់ Admin Reply ក្នុង Group
         admin_reply_handler = MessageHandler(filters.ChatType.GROUPS & filters.REPLY, handle_admin_reply)
 
         application.add_handler(user_handler)
