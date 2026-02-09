@@ -1,6 +1,8 @@
 import os
 import logging
 import threading
+import time          # <--- សម្រាប់រាប់ម៉ោងពេល Restart
+import asyncio       # <--- សម្រាប់គ្រប់គ្រង Async Loop
 import re
 from flask import Flask
 from telegram import Update, ReactionTypeEmoji
@@ -18,20 +20,21 @@ except (TypeError, ValueError):
 # --- LOGGING ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.ERROR # <--- ប្តូរទៅ ERROR ដើម្បីកុំឱ្យ Log ពេញអេក្រង់ពេក
 )
 
-# --- WEB SERVER ---
+# --- WEB SERVER (Keep Render Awake) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running..."
+    return "Bot is running with Auto-Restart enabled!"
 
 def run_flask():
+    # Run port 10000 for Render
     app.run(host="0.0.0.0", port=10000)
 
-# --- BOT LOGIC ---
+# --- BOT LOGIC (HANDLERS) ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != ADMIN_ID:
@@ -43,7 +46,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if update.effective_chat.type == "private":
         try:
-            # 1. Reaction ❤️ លើសារ User (ក្នុង Private Chat)
+            # 1. Reaction ❤️
             try: 
                 await context.bot.set_message_reaction(
                     chat_id=update.effective_chat.id,
@@ -52,7 +55,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             except: pass
 
-            # 2. បង្កើតអត្ថបទ User Info
+            # 2. User Info
             user = update.effective_user
             user_link = f"https://t.me/{user.username}" if user.username else f"tg://user?id={user.id}"
             
@@ -64,15 +67,14 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"👇 **សូម Reply លើសារនេះ ដើម្បីតបទៅគាត់វិញ!**"
             )
 
-            # 3. Forward សារដើមទៅ Admin
+            # 3. Forward
             forwarded_msg = await context.bot.forward_message(
                 chat_id=ADMIN_ID,
                 from_chat_id=update.effective_chat.id,
                 message_id=update.message.message_id
             )
 
-            # 4. ផ្ញើ Info ទៅតាមក្រោយ (Reply ជាប់ជាមួយ Forward)
-            # សំខាន់៖ ការដាក់ reply_to_message_id នៅទីនេះ ជួយឱ្យយើងរកសារដើមឃើញពេលក្រោយ
+            # 4. Info Message
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=info_text,
@@ -92,28 +94,24 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_user_id = None
 
     try:
-        # --- រក USER ID ---
-        # 1. ពីអត្ថបទ (ID: ...)
+        # Find ID
         if original_msg.text and "ID:" in original_msg.text:
             match = re.search(r"ID:\s*`?(\d+)`?", original_msg.text)
             if match:
                 target_user_id = int(match.group(1))
 
-        # 2. ពី Forward Header
         if not target_user_id and original_msg.forward_from:
             target_user_id = original_msg.forward_from.id
 
-        # --- ផ្ញើចេញ និង ដាក់ REACTION ---
+        # Send & React
         if target_user_id:
             try:
-                # A. Copy សារផ្ញើទៅ User
                 await context.bot.copy_message(
                     chat_id=target_user_id,
                     from_chat_id=update.effective_chat.id,
                     message_id=update.message.message_id
                 )
-
-                # B. ដាក់ Reaction ❤️ លើសារដែល Admin បាន Reply (សារ Info)
+                # Reaction ❤️ on Admin's messages
                 try:
                     await context.bot.set_message_reaction(
                         chat_id=ADMIN_ID,
@@ -121,9 +119,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         reaction=[ReactionTypeEmoji("❤️")]
                     )
                 except: pass
-
-                # C. ដាក់ Reaction ❤️ លើសារដើម (Forwarded Message) ផងដែរ
-                # ដោយសារយើងបាន Link សារ Info ជាមួយ Forward (Reply chain) យើងអាចរកសារដើមបាន
+                
                 if original_msg.reply_to_message:
                     try:
                         await context.bot.set_message_reaction(
@@ -134,33 +130,47 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     except: pass
                 
             except Exception as send_error:
-                await update.message.reply_text(f"❌ ផ្ញើមិនបាន (User Block Bot): {send_error}")
+                await update.message.reply_text(f"❌ ផ្ញើមិនបាន: {send_error}")
         else:
-            await update.message.reply_text(
-                "⚠️ **រក User ID មិនឃើញ!**\n"
-                "សូម Reply លើសារដែលមានសរសេរថា **'ID: ...'**"
-            )
+            await update.message.reply_text("⚠️ **រក User ID មិនឃើញ!** Reply លើសារដែលមាន ID ទើបបាន។")
 
     except Exception as e:
         logging.error(f"Reply Error: {e}")
 
-# --- MAIN EXECUTION ---
-if __name__ == '__main__':
-    threading.Thread(target=run_flask).start()
-    
+# --- MAIN EXECUTION WITH AUTO-RESTART ---
+def main_bot():
+    """ មុខងារបង្កើត និងដំណើរការ Bot """
     if not TOKEN or not ADMIN_ID:
         print("🚨 Error: ភ្លេចដាក់ TOKEN ឬ ADMIN_GROUP_ID")
-    else:
-        application = ApplicationBuilder().token(TOKEN).build()
-        application.add_handler(CommandHandler("start", start_command))
-        
-        # Admin Handler
-        admin_handler = MessageHandler(filters.Chat(chat_id=ADMIN_ID) & filters.REPLY, handle_admin_reply)
-        application.add_handler(admin_handler)
+        return
 
-        # User Handler
-        user_handler = MessageHandler(filters.ChatType.PRIVATE & (~filters.Chat(chat_id=ADMIN_ID)), handle_user_message)
-        application.add_handler(user_handler)
+    application = ApplicationBuilder().token(TOKEN).build()
+    
+    # Handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(MessageHandler(filters.Chat(chat_id=ADMIN_ID) & filters.REPLY, handle_admin_reply))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & (~filters.Chat(chat_id=ADMIN_ID)), handle_user_message))
 
-        print("Bot started...")
-        application.run_polling()
+    print("✅ Bot is starting...")
+    # run_polling នឹងដំណើរការរហូតទាល់តែមាន Error
+    application.run_polling()
+
+if __name__ == '__main__':
+    # 1. ដំណើរការ Web Server (ដាច់ដោយឡែក)
+    threading.Thread(target=run_flask).start()
+    
+    # 2. ដំណើរការ Bot ក្នុងរង្វង់អមតៈ (Infinite Loop)
+    print("🚀 System started with Auto-Restart Protection")
+    
+    while True:
+        try:
+            main_bot() # ហៅ Bot មកប្រើ
+        except Exception as e:
+            # បើ Bot គាំង (Crash), កូដនឹងធ្លាក់មកដល់ត្រង់នេះ
+            print(f"⚠️ Bot Crashed! Error: {e}")
+            print("🔄 Restarting in 5 seconds...")
+            time.sleep(5) # សម្រាក ៥ វិនាទី
+            # បន្ទាប់មកវានឹងវិលទៅលើ ហើយ Start Bot ម្ដងទៀត
+        except KeyboardInterrupt:
+            print("🛑 Bot stopped by user.")
+            break
