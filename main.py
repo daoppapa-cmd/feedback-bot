@@ -76,7 +76,7 @@ if __name__ == '__main__':
     # ចាប់យកសារទាំងអស់ដែលមិនមែនជា Command
     echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), forward_to_admin)
     # ចាប់យកការ Reply របស់ Admin
-    reply_handler = MessageHandler(filters.Reply, reply_to_user)
+    reply_handler = MessageHandler(filters.REPLY, reply_to_user)
 
     application.add_handler(echo_handler)
     application.add_handler(reply_handler)
